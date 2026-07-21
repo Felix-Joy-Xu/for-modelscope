@@ -1,0 +1,106 @@
+name: 魔搭评论正文采集
+
+# 每天 UTC 19:07（北京时间 03:07）自动运行，也可手动触发。
+# 在汇总数据基础上抓取活跃模型的评论/Issue/PR/讨论正文+回复。
+# 进度通过 Actions Cache 跨运行保存；数据产物通过 Artifacts 下载。
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7 19 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  crawl-texts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 安装依赖
+        run: pip install requests
+
+      # 优先取自己的缓存，首次从评论汇总缓存接力
+      - name: 恢复爬取进度缓存
+        uses: actions/cache@v4
+        with:
+          path: modelscope_output
+          key: ms-texts-${{ github.run_id }}
+          restore-keys: |
+            ms-texts-
+            ms-comments-
+          save-always: true
+
+      - name: 首次运行解包种子数据
+        run: |
+          if [ ! -f modelscope_output/ms_comments_all.jsonl ]; then
+            tar -xzf seed/modelscope_seed.tar.gz
+            echo "seed extracted"
+          else
+            echo "cache hit, skip seed"
+          fi
+
+      - name: 运行评论正文爬虫（断点续爬）
+        run: python crawl_ms_comment_texts.py
+
+      - name: 上传数据产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ms-texts-run${{ github.run_number }}
+          path: |
+            modelscope_output/ms_comment_texts.jsonl
+            modelscope_output/state_ms_comment_texts.json
+          retention-days: 30
+
+      # 生成轻量 progress_texts.json 并回写仓库
+      - name: 生成并回写进度文件
+        if: always()
+        run: |
+          python - <<'EOF'
+          import json, os, datetime
+          base = "modelscope_output"
+          done = 0
+          try:
+              with open(os.path.join(base, "state_ms_comment_texts.json"), encoding="utf-8") as f:
+                  done = len(json.load(f))
+          except Exception as e:
+              print("state 读取失败:", e)
+          threads = replies = models = 0
+          try:
+              with open(os.path.join(base, "ms_comment_texts.jsonl"), encoding="utf-8") as f:
+                  for line in f:
+                      if not line.strip():
+                          continue
+                      r = json.loads(line)
+                      models += 1
+                      threads += r.get("thread_count") or 0
+                      replies += r.get("reply_count") or 0
+          except Exception as e:
+              print("jsonl 读取失败:", e)
+          prog = {
+              "done": done,
+              "total": 2315,
+              "modelsWithData": models,
+              "threads": threads,
+              "replies": replies,
+              "updatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+          }
+          with open("progress_texts.json", "w", encoding="utf-8") as f:
+              json.dump(prog, f, ensure_ascii=False, indent=1)
+          print(prog)
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add progress_texts.json
+          git diff --cached --quiet || git commit -m "data: 评论正文进度 $(date -u '+%F %H:%M')"
+          git pull --rebase origin main || true
+          git push || echo "::warning::progress_texts.json 推送失败，下次运行会重试"
