@@ -12,6 +12,7 @@ except ImportError:
 输出与状态文件格式与浏览器版完全一致，无缝断点续爬。
 """
 import json
+import sys
 import time
 import threading
 import requests
@@ -75,8 +76,8 @@ def fetch_comments(model_id):
 
 def main():
     if not MODELS_FILE.exists():
-        print(f"File not found: {MODELS_FILE}")
-        return
+        print(f"File not found: {MODELS_FILE}", flush=True)
+        sys.exit(2)
 
     with open(MODELS_FILE, "r", encoding="utf-8") as f:
         models = json.load(f)
@@ -130,6 +131,8 @@ def main():
     with open(STATE_FILE, "w", encoding="utf-8") as sf:
         json.dump(list(completed), sf)
     print(f"Finished. +{done_this_run} this run, total done {len(completed)}", flush=True)
+    if abort_flag.is_set():
+        sys.exit(3)
 
 
 if __name__ == "__main__":
