@@ -18,7 +18,7 @@ import requests
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-BASE_DIR = Path(r"D:\国际比较政治经济学\01-爬虫程序")
+BASE_DIR = Path(__file__).resolve().parent
 MODELS_FILE = BASE_DIR / "modelscope_output" / "models_all.json"
 OUTPUT_FILE = BASE_DIR / "modelscope_output" / "ms_comments_all.jsonl"
 STATE_FILE = BASE_DIR / "modelscope_output" / "state_ms_comments.json"

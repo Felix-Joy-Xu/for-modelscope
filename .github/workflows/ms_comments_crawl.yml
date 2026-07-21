@@ -1,0 +1,59 @@
+name: 魔搭评论爬虫
+
+# 每天 UTC 18:23（北京时间 02:23）自动运行，也可手动触发。
+# 进度通过 Actions Cache 跨运行保存；数据产物通过 Artifacts 下载。
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 18 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 安装依赖
+        run: pip install requests
+
+      - name: 恢复爬取进度缓存
+        uses: actions/cache@v4
+        with:
+          path: modelscope_output
+          key: ms-comments-${{ github.run_id }}
+          restore-keys: ms-comments-
+          save-always: true
+
+      - name: 首次运行解包种子数据
+        run: |
+          if [ ! -f modelscope_output/models_all.json ]; then
+            mkdir -p modelscope_output
+            tar -xzf seed/modelscope_seed.tar.gz -C modelscope_output
+            echo "seed extracted"
+          else
+            echo "cache hit, skip seed"
+          fi
+
+      - name: 运行评论爬虫（断点续爬）
+        run: python crawl_ms_comments_api.py
+
+      - name: 上传数据产物
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ms-comments-run${{ github.run_number }}
+          path: |
+            modelscope_output/ms_comments_all.jsonl
+            modelscope_output/state_ms_comments.json
+          retention-days: 30
