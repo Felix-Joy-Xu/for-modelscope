@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "SJTU Canvas 视频自动播放插件",
+  "version": "1.2",
+  "description": "自动播放上海交大 Canvas (oc.sjtu.edu.cn) 上的视频，并在播放结束后自动跳转到下一个模块。",
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.sjtu.edu.cn/*",
+        "<all_urls>"
+      ],
+      "all_frames": true,
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_end"
+    }
+  ]
+}

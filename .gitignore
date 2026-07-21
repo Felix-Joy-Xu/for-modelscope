@@ -1,0 +1,13 @@
+# ===== 敏感配置（绝不提交）=====
+_secrets.py
+_scrub_secrets.py
+ms_comment_api_info.json
+
+# ===== 爬取数据（体积大，不入库）=====
+modelscope_output/
+
+# ===== 运行产物 =====
+__pycache__/
+*.pyc
+*.log
+*.err

@@ -1,0 +1,203 @@
+"""Boss直聘 全量JD抓取 - 从已有7.3万条数据抓取完整JD并导出CSV (支持断点续抓)"""
+import json
+import csv
+import time
+import random
+import ctypes
+import sys
+from pathlib import Path
+from DrissionPage import ChromiumPage
+
+# 配置
+SOURCE_PATH = Path(r"D:\hiring_data\boss_api\tech_jobs_grid_72k.jsonl")
+JD_PATH = Path(r"D:\hiring_data\boss_api\boss_jd_full.jsonl")
+CSV_PATH = Path(r"D:\hiring_data\boss_api\boss_full_final.csv")
+JD_DELAY_MIN = 1.5
+JD_DELAY_MAX = 3.5
+SAVE_INTERVAL = 50  # 每50条flush一次
+
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+def collect_all_unique_ids():
+    """从已有数据收集所有唯一encryptJobId，去重"""
+    ids = []
+    seen = set()
+    with open(SOURCE_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                data = json.loads(line)
+                jid = data.get("encryptJobId", "")
+                if jid and jid not in seen:
+                    seen.add(jid)
+                    ids.append(jid)
+            except:
+                pass
+    log(f"总记录 {seen.__len__()} 条，去重后唯一ID: {len(ids)}")
+    return ids
+
+def load_done_ids():
+    """加载已抓取的ID，支持断点续抓"""
+    done = set()
+    if JD_PATH.exists():
+        try:
+            with open(JD_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    d = json.loads(line)
+                    done.add(d.get("encryptJobId", ""))
+        except:
+            pass
+    log(f"已完成: {len(done)} 条")
+    return done
+
+def main():
+    log("=== Boss 全量JD抓取 (支持断点续抓) ===")
+    
+    all_ids = collect_all_unique_ids()
+    done_ids = load_done_ids()
+    pending_ids = [jid for jid in all_ids if jid not in done_ids]
+    log(f"待抓取: {len(pending_ids)} / 总: {len(all_ids)}")
+    
+    if not pending_ids:
+        log("全部已完成！直接导出CSV。")
+        export_csv()
+        return
+    
+    page = ChromiumPage()
+    page.get("https://www.zhipin.com/web/geek/job?city=101010100")
+    time.sleep(2)
+    
+    ctypes.windll.user32.MessageBoxW(
+        0,
+        f"全量JD抓取\n已完成: {len(done_ids)}\n待抓取: {len(pending_ids)}\n预计耗时: {len(pending_ids)*3//60} 分钟\n请确认浏览器已登录，点击确定开始",
+        "全量JD抓取", 0x00001000 | 0x00000040
+    )
+    log(f"开始抓取，共 {len(pending_ids)} 条...")
+    
+    success = len(done_ids)
+    fail = 0
+    batch_success = 0
+    batch_fail = 0
+    
+    with open(JD_PATH, "a", encoding="utf-8") as fout:
+        for idx, jid in enumerate(pending_ids, 1):
+            log(f"[{idx}/{len(pending_ids)}] {jid}")
+            
+            url = f"https://www.zhipin.com/job_detail/{jid}.html"
+            page.get(url)
+            time.sleep(random.uniform(JD_DELAY_MIN, JD_DELAY_MAX))
+            
+            jd_ele = page.ele('.job-sec-text', timeout=3)
+            if jd_ele and jd_ele.text.strip():
+                record = {
+                    "encryptJobId": jid,
+                    "jd_text": jd_ele.text.strip(),
+                    "crawl_ts": time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+                }
+                fout.write(json.dumps(record, ensure_ascii=False) + "\n")
+                
+                batch_success += 1
+                success += 1
+                log(f"  ✓ {len(record['jd_text'])} 字符 | 累计成功:{success} 本批:{batch_success}/{idx}({100*batch_success//idx:.0f}%)")
+            else:
+                batch_fail += 1
+                fail += 1
+                log(f"  ✗ 无JD | 累计失败:{fail}")
+            
+            # 每SAVE_INTERVAL条flush + 进度报告
+            if idx % SAVE_INTERVAL == 0:
+                fout.flush()
+                log(f"  >> 进度: {idx}/{len(pending_ids)} ({100*idx//len(pending_ids)}%) | 成功率: {100*batch_success//idx:.0f}%")
+    
+    log(f"\n全量JD抓取完成!")
+    log(f"  成功新增: {batch_success} | 失败新增: {batch_fail}")
+    log(f"  总计成功: {success} | 总失败: {fail}")
+    
+    # 导出CSV
+    export_csv()
+
+def export_csv():
+    """合并原始数据+JD，导出CSV"""
+    log("开始导出CSV...")
+    
+    # 加载JD映射
+    jd_map = {}
+    if JD_PATH.exists():
+        with open(JD_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                d = json.loads(line)
+                jd_map[d["encryptJobId"]] = d.get("jd_text", "")
+    log(f"加载JD: {len(jd_map)} 条")
+    
+    headers = [
+        "encryptJobId", "jobName", "salaryDesc", "brandName",
+        "cityName", "areaDistrict", "businessDistrict",
+        "jobDegree", "jobExperience", "skills", "jobLabels",
+        "bossName", "bossTitle", "brandIndustry",
+        "brandScaleName", "brandStageName", "jobTypeDesc",
+        "jobDesc", "jd_text", "crawl_ts"
+    ]
+    
+    count = 0
+    with_jd = 0
+    with open(SOURCE_PATH, "r", encoding="utf-8") as fin, \
+         open(CSV_PATH, "w", encoding="utf-8-sig", newline="") as fout:
+        writer = csv.writer(fout)
+        writer.writerow(headers)
+        
+        seen = set()
+        for line in fin:
+            if not line.strip():
+                continue
+            data = json.loads(line)
+            jid = data.get("encryptJobId", "")
+            if jid in seen:
+                continue
+            seen.add(jid)
+            
+            skills = " | ".join(data.get("skills", []))
+            labels = " | ".join(data.get("jobLabels", []))
+            jd_text = jd_map.get(jid, "")
+            if jd_text:
+                with_jd += 1
+            
+            row = [
+                jid,
+                data.get("jobName", ""),
+                data.get("salaryDesc", ""),
+                data.get("brandName", ""),
+                data.get("cityName", ""),
+                data.get("areaDistrict", ""),
+                data.get("businessDistrict", ""),
+                data.get("jobDegree", ""),
+                data.get("jobExperience", ""),
+                skills,
+                labels,
+                data.get("bossName", ""),
+                data.get("bossTitle", ""),
+                data.get("brandIndustry", ""),
+                data.get("brandScaleName", ""),
+                data.get("brandStageName", ""),
+                data.get("jobTypeDesc", ""),
+                data.get("jobDesc", ""),
+                jd_text,
+                data.get("crawl_ts", ""),
+            ]
+            writer.writerow(row)
+            count += 1
+            
+            if count % 10000 == 0:
+                log(f"  导出中... {count} 条 (含JD: {with_jd})")
+    
+    log(f"CSV导出成功!")
+    log(f"  总记录: {count} | 含JD: {with_jd} ({100*with_jd//count:.0f}%)")
+    log(f"  保存至: {CSV_PATH}")
+
+if __name__ == "__main__":
+    main()
