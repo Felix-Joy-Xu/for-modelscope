@@ -115,13 +115,15 @@ for msap_id, hf_id, label in SAMPLES:
             msap_meta = m
             break
     if not msap_meta:
-        # 索引中也有
-        with open(os.path.join(OUTPUT_DIR, "model_cards_index.json"), "r", encoding="utf-8") as f:
-            cards_idx = json.load(f)
-        for c in cards_idx:
-            if c["model_id"].lower() == msap_id.lower():
-                msap_meta = c
-                break
+        # 索引中也有（索引文件可能不存在，如云端环境）
+        idx_path = os.path.join(OUTPUT_DIR, "model_cards_index.json")
+        if os.path.exists(idx_path):
+            with open(idx_path, "r", encoding="utf-8") as f:
+                cards_idx = json.load(f)
+            for c in cards_idx:
+                if c["model_id"].lower() == msap_id.lower():
+                    msap_meta = c
+                    break
 
     # 4. 组装对比记录
     msap_dl = (msap_meta or {}).get("Downloads") or (msap_meta or {}).get("downloads") or 0
